@@ -163,7 +163,7 @@ const Index = () => {
     document.head.appendChild(style);
 
     player.addEventListener('player:ready', function() {
-      (player as any).displayHiddenElements(1204, ['.esconder'], { persist: true });
+      (player as any).displayHiddenElements(1036, ['.esconder'], { persist: true });
 
       const observer = new MutationObserver(() => {
         const ctaSection = document.getElementById('cta-section');
