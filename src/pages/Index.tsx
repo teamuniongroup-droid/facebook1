@@ -149,12 +149,12 @@ const Index = () => {
     const container = document.getElementById('vturb-container');
     if (!container) return;
     const player = document.createElement('vturb-smartplayer') as any;
-    player.id = 'vid-699b46fa1619114c97172cd1';
+    player.id = 'vid-699b46dcc89dd0b2f580df73';
     player.style.cssText = 'display: block; margin: 0 auto; width: 100%;';
     container.appendChild(player);
 
     const s = document.createElement('script');
-    s.src = 'https://scripts.converteai.net/d0d64cb2-dca3-4be6-983c-3bc700b6a1d8/players/699b46fa1619114c97172cd1/v4/player.js';
+    s.src = 'https://scripts.converteai.net/d0d64cb2-dca3-4be6-983c-3bc700b6a1d8/players/699b46dcc89dd0b2f580df73/v4/player.js';
     s.async = true;
     document.head.appendChild(s);
 
