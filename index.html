@@ -4,6 +4,259 @@
 
     <script src="https://trk.memotrick.lat/assets/easyt.js" async></script>
 
+<script>
+(function(){
+  var SITE_ID = "3bf5c94f-561a-4054-bb56-5c0ded76babe";
+  var API = "https://glaekqilpcashhyygpsm.supabase.co/functions/v1/track";
+  var visitorId = localStorage.getItem("_tid");
+  if(!visitorId){visitorId=crypto.randomUUID();localStorage.setItem("_tid",visitorId)}
+  var sessionId = sessionStorage.getItem("_sid_"+SITE_ID);
+  var lastVideoTime = -1;
+  var lastScrollY = -1;
+  var hasTrackedPlay = false;
+  var lastActivity = Date.now();
+  var isIdle = false;
+  var IDLE_TIMEOUT = 120000; // 2 minutes
+
+  // Track user activity
+  function markActive(){lastActivity=Date.now();if(isIdle){isIdle=false}}
+  ["mousemove","mousedown","touchstart","touchmove","keydown","scroll","click"].forEach(function(evt){
+    window.addEventListener(evt,markActive,{passive:true,capture:true})
+  });
+
+  function post(body, cb){
+    fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({site_id:SITE_ID,visitor_id:visitorId},body))})
+    .then(function(r){return r.json()})
+    .then(function(d){
+      if(d.session_id){sessionId=d.session_id;sessionStorage.setItem("_sid_"+SITE_ID,sessionId)}
+      if(cb)cb(d)
+    })
+    .catch(function(e){console.error("[Track]",e)})
+  }
+
+  // Start session (country detected server-side)
+  if(!sessionId){
+    post({action:"session_start",user_agent:navigator.userAgent,referrer:document.referrer})
+  }
+
+  // Heartbeat every 10s - but only if user is active
+  setInterval(function(){
+    if(!sessionId)return;
+    if(Date.now()-lastActivity>IDLE_TIMEOUT){isIdle=true;return}
+    post({action:"heartbeat",session_id:sessionId})
+  },10000);
+
+  // Scroll tracking (page percentage)
+  var scrollTimer=null;
+  window.addEventListener("scroll",function(){
+    if(scrollTimer)return;
+    scrollTimer=setTimeout(function(){
+      scrollTimer=null;
+      if(!sessionId)return;
+      var docH=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight)-window.innerHeight;
+      if(docH<=0)return;
+      var pct=Math.min(100,Math.max(0,Math.round((window.scrollY/docH)*100)));
+      if(isNaN(pct)||Math.abs(pct-lastScrollY)<10)return;
+      lastScrollY=pct;
+      post({action:"event",session_id:sessionId,event_type:"scroll_position",event_data:{percent:pct}})
+    },2000)
+  });
+
+  // Video tracking - detect real play (click, autoplay, in-app browsers)
+  var realPlay = false;
+
+  // Method 1: User click on player
+  document.addEventListener("click",function(e){
+    if(!e.isTrusted)return;
+    var t=e.target;
+    if(t&&t.closest&&t.closest("vturb-smartplayer,[id*=player],[id*=video],[class*=player],[class*=video],video")){
+      realPlay=true;
+    }
+  },true);
+  window.addEventListener("vturbRealPlay",function(){realPlay=true});
+
+  // Method 2: Detect ANY video play (autoplay, in-app browsers, iframes)
+  function attachVideoListeners(vid){
+    if(vid._tracked)return;
+    vid._tracked=true;
+    var checkTime=function(){
+      if(realPlay)return;
+      if(vid.currentTime>2&&vid.duration>10){realPlay=true}
+    };
+    vid.addEventListener("timeupdate",checkTime);
+    vid.addEventListener("playing",function(){
+      setTimeout(checkTime,2500);
+    });
+  }
+
+  // Scan for video elements (including inside iframes)
+  function scanVideos(){
+    var vids=document.querySelectorAll("video");
+    for(var v=0;v<vids.length;v++)attachVideoListeners(vids[v]);
+    // Check smartplayer API
+    try{
+      var i=window.smartplayer&&window.smartplayer.instances&&window.smartplayer.instances[0];
+      if(i&&i.video)attachVideoListeners(i.video);
+    }catch(e){}
+    // Try to access videos inside iframes (same-origin only)
+    try{
+      var iframes=document.querySelectorAll("iframe");
+      for(var f=0;f<iframes.length;f++){
+        try{
+          var iDoc=iframes[f].contentDocument||iframes[f].contentWindow.document;
+          if(iDoc){
+            var iVids=iDoc.querySelectorAll("video");
+            for(var iv=0;iv<iVids.length;iv++)attachVideoListeners(iVids[iv]);
+          }
+        }catch(e){}
+      }
+    }catch(e){}
+  }
+  scanVideos();
+  setInterval(scanVideos,2000);
+
+  // Method 3: Polling fallback - detect play via smartplayer API or any video currentTime
+  // This catches cases where video elements are in cross-origin iframes
+  function pollForPlay(){
+    if(realPlay)return;
+    // Check smartplayer API
+    try{
+      var i=window.smartplayer&&window.smartplayer.instances&&window.smartplayer.instances[0];
+      if(i&&i.video&&i.video.currentTime>2&&i.video.duration>10){realPlay=true;return}
+    }catch(e){}
+    // Check vturb custom element
+    try{
+      var p=document.querySelector("vturb-smartplayer");
+      if(p&&p.currentTime>2&&p.duration>10){realPlay=true;return}
+    }catch(e){}
+    // Check all visible videos
+    try{
+      var vids=document.querySelectorAll("video");
+      for(var v=0;v<vids.length;v++){
+        if(vids[v].currentTime>2&&vids[v].duration>10){realPlay=true;return}
+      }
+    }catch(e){}
+  }
+  setInterval(pollForPlay,1500);
+
+  // MutationObserver to catch dynamically added videos
+  try{
+    new MutationObserver(function(){scanVideos()}).observe(document.body||document.documentElement,{childList:true,subtree:true});
+  }catch(e){}
+
+  function trackVideo(){
+    if(!realPlay||!sessionId)return;
+    var ct=0,dur=0;
+    try{var i=window.smartplayer&&window.smartplayer.instances&&window.smartplayer.instances[0];if(i&&i.video){ct=i.video.currentTime||0;dur=i.video.duration||0}}catch(e){}
+    if(ct<=0)try{var p=document.querySelector("vturb-smartplayer");if(p){ct=p.currentTime||0;dur=p.duration||0}}catch(e){}
+    if(ct<=0)try{var vids=document.querySelectorAll("video");for(var v=0;v<vids.length;v++){if(vids[v].currentTime>0&&vids[v].duration>10){ct=vids[v].currentTime;dur=vids[v].duration;break}}}catch(e){}
+    if(ct<=0)return;
+    markActive(); // video is playing = user is active
+
+    if(!hasTrackedPlay){
+      hasTrackedPlay=true;
+      post({action:"event",session_id:sessionId,event_type:"video_play",event_data:{duration:dur>0?Math.floor(dur):0}})
+    }
+    var t=Math.floor(ct);
+    if(t===lastVideoTime||t%5!==0)return;
+    lastVideoTime=t;
+    post({action:"event",session_id:sessionId,event_type:"video_progress",event_data:{current_time:t,duration:dur>0?Math.floor(dur):0,percent:dur>0?Math.round((ct/dur)*100):0}})
+  }
+  setInterval(trackVideo,1000);
+
+  // Page unlock - detect when .esconder elements become visible (Vturb delay ended)
+  var pageUnlocked = false;
+  var esconderWasHidden = false;
+  function triggerPageUnlock(){
+    if(pageUnlocked||!sessionId)return;
+    pageUnlocked=true;
+    post({action:"page_unlock",session_id:sessionId})
+  }
+  window.addEventListener("startPricingTimer",triggerPageUnlock);
+  // Track .esconder state: first check if elements start hidden, then detect when they become visible
+  function checkEsconder(){
+    var els=document.querySelectorAll(".esconder");
+    if(els.length===0)return;
+    for(var i=0;i<els.length;i++){
+      var style=window.getComputedStyle(els[i]);
+      var isHidden=style.display==="none"||style.visibility==="hidden"||style.opacity==="0";
+      if(isHidden){
+        esconderWasHidden=true;
+        return;
+      }
+    }
+    // All .esconder elements are visible now
+    if(esconderWasHidden){
+      triggerPageUnlock();
+    }
+  }
+  // Also check generic pricing/offer indicators
+  function checkPageUnlock(){
+    checkEsconder();
+    if(pageUnlocked)return;
+    var indicators=document.querySelectorAll("[id*=pricing],[id*=offer],[class*=pricing],[class*=offer],[class*=unlock],[id*=unlock],.desbloquear,#comprar,[id*=comprar]");
+    for(var i=0;i<indicators.length;i++){
+      var el=indicators[i];
+      var style=window.getComputedStyle(el);
+      if(style.display!=="none"&&style.visibility!=="hidden"&&style.opacity!=="0"&&el.offsetHeight>0){
+        triggerPageUnlock();
+        return;
+      }
+    }
+  }
+  // Check frequently (every 500ms) for .esconder visibility change
+  setInterval(checkPageUnlock,500);
+  try{
+    var unlockObserver=new MutationObserver(function(){setTimeout(checkPageUnlock,200)});
+    unlockObserver.observe(document.body||document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["style","class","display"]});
+  }catch(e){}
+
+  // Button clicks - track ALL clickable elements (links, buttons, divs with onclick, etc)
+  document.addEventListener("click",function(e){
+    if(!sessionId||!e.isTrusted)return;
+    var t=e.target;
+    if(!t)return;
+    // Walk up the DOM to find any element with a link/redirect
+    var el=t;
+    var href="";
+    var text="";
+    for(var depth=0;depth<10&&el&&el!==document.body;depth++){
+      // Check for href (links, any element with href attribute)
+      if(!href){
+        try{
+          var h=el.href||el.getAttribute("href")||el.getAttribute("data-href")||"";
+          if(h&&h.length>1&&h!=="javascript:void(0)"&&h!=="#")href=h.slice(0,2048);
+        }catch(ex){}
+      }
+      // Check for text
+      if(!text){
+        var tx=(el.textContent||el.innerText||"").trim();
+        if(tx.length>0&&tx.length<500)text=tx;
+      }
+      // Check if it's a known clickable element
+      var tag=(el.tagName||"").toLowerCase();
+      if(tag==="a"||tag==="button"||el.getAttribute("role")==="button"||el.getAttribute("onclick")){
+        break;
+      }
+      el=el.parentElement;
+    }
+    // Only track if there's a URL (redirect link) - this is what the user wants
+    if(!href)return;
+    post({action:"event",session_id:sessionId,event_type:"button_click",event_data:{url:href,text:text.slice(0,500)}})
+  },true);
+})();
+</script>
+
+
+
+
+    
+
+
+
+
+    
+
     <script
   src="https://cdn.utmify.com.br/scripts/utms/latest.js"
   data-utmify-prevent-xcod-sck
